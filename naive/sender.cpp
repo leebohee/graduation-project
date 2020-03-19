@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
   char* haddr;
   struct sockaddr_in server_addr;
 
-  fp = fopen("output.txt", "w");
+  fp = fopen("output_sender.txt", "w");
   signal(SIGINT, sig_handler);  // Ctrl+c
 
   if (argc != 2) {
