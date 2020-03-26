@@ -9,11 +9,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <time.h>
 #include <unistd.h>
+#include <chrono>
 #include <mutex>
 #include <queue>
-#include <vector>
 
 #define BUF_LEN 60000
 
@@ -21,13 +20,14 @@ using namespace std;
 
 struct sendInfo {
   uint64_t total_bytes;
-  clock_t send_time;
-  sendInfo(uint64_t bytes, clock_t t) : total_bytes(bytes), send_time(t){};
+  chrono::system_clock::time_point send_time;
+  sendInfo(uint64_t bytes, chrono::system_clock::time_point t)
+      : total_bytes(bytes), send_time(t){};
 };
 queue<struct sendInfo> send_info;
 
-int sock;       // socket
-clock_t start;  // start time
+int sock;  // socket
+chrono::system_clock::time_point start;
 mutex m;
 pthread_t tid[2];
 FILE* fp = NULL;  // output file
@@ -46,17 +46,18 @@ void* sender(void* arg) {
   memset(buf, '1', sizeof(char) * BUF_LEN);
   uint64_t seq = 0;  // cumulative # of bytes sent at application layer
   int n;
+  chrono::duration<double> t;
 
   while (1) {
     m.lock();
     n = write(sock, buf, strlen(buf));
     seq += n;
-    struct sendInfo entry(seq, clock());
+    struct sendInfo entry(seq, chrono::system_clock::now());
     send_info.push(entry);
     m.unlock();
+    t = (send_info.back().send_time - chrono::system_clock::now());
     fprintf(fp, "[ SENDER ] elapsed time = %lf, total bytes sent = %llu\n",
-            (double)(send_info.back().send_time - start) / CLOCKS_PER_SEC,
-            send_info.back().total_bytes);
+            t.count(), send_info.back().total_bytes);
   }
   return NULL;
 }
@@ -65,7 +66,8 @@ void* tracker(void* arg) {
   struct tcp_info info;
   uint64_t bytes_sent;
   socklen_t len = sizeof(info);
-  double cur, D;
+  chrono::duration<double> cur, D;
+
   while (1) {
     // get socket data
     if (getsockopt(sock, IPPROTO_TCP, TCP_INFO, &info, &len)) {
@@ -81,13 +83,13 @@ void* tracker(void* arg) {
       if (send_info.front().total_bytes > bytes_sent) {
         break;
       } else {
-        D = (double)(clock() - send_info.front().send_time) / CLOCKS_PER_SEC;
+        D = chrono::system_clock::now() - send_info.front().send_time;
         send_info.pop();
       }
     }
     // print information
     if (!send_info.empty()) {
-      cur = (double)(clock() - start) / CLOCKS_PER_SEC;
+      cur = chrono::system_clock::now() - start;
       fprintf(
           fp,
           "[ TRACKER ] qsize = %d, total bytes = %llu, elapsed time = %lfs, "
@@ -100,7 +102,7 @@ void* tracker(void* arg) {
     m.unlock();
 
     // sleep for 10msec
-    usleep(10000);
+    int ret = usleep(10000);
   }
   return NULL;
 }
@@ -133,7 +135,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  start = clock();
+  start = chrono::system_clock::now();
   pthread_create(&tid[0], NULL, sender, NULL);
   pthread_create(&tid[1], NULL, tracker, NULL);
   pthread_join(tid[0], (void**)&result);

@@ -10,11 +10,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <time.h>
 #include <unistd.h>
+#include <chrono>
 #include <mutex>
 #include <queue>
-#include <vector>
 
 #define BUF_LEN 60000
 
@@ -22,16 +21,20 @@ using namespace std;
 
 struct recvInfo {
   uint64_t total_bytes;
-  clock_t send_time;
-  recvInfo(uint64_t bytes, clock_t t) : total_bytes(bytes), send_time(t){};
+  chrono::system_clock::time_point recv_time;
+  recvInfo(uint64_t bytes, chrono::system_clock::time_point t)
+      : total_bytes(bytes), recv_time(t){};
 };
 queue<struct recvInfo> recv_info;
 
 int conn_sock;  // socket
-clock_t start;  // start time
+chrono::system_clock::time_point start;
 mutex m;
 pthread_t tid[2];
 FILE* fp = NULL;  // output file
+uint32_t ssthresh = 0;
+uint32_t cwnd = 0;
+uint32_t rtt = 0;
 
 void sig_handler(int sig) {
   printf("Received SIGINT\n");
@@ -46,7 +49,7 @@ void* receiver(void* arg) {
   char* buf = (char*)malloc(sizeof(char) * BUF_LEN);
   uint64_t seq = 0;  // cumulative # of bytes received at application layer
   int n;
-  double cur, D;
+  chrono::duration<double> cur, D;
 
   while (1) {
     n = read(conn_sock, buf, BUF_LEN);
@@ -58,15 +61,16 @@ void* receiver(void* arg) {
     }
     while (!recv_info.empty()) {
       if (recv_info.front().total_bytes > seq) {
-        D = (double)(clock() - recv_info.front().send_time) / CLOCKS_PER_SEC;
-        cur = (double)(clock() - start) / CLOCKS_PER_SEC;
+        D = chrono::system_clock::now() - recv_info.front().recv_time;
+        cur = chrono::system_clock::now() - start;
 
         // print information
         fprintf(
             fp,
             "[ RECEIVER ] qsize = %d, total bytes = %llu, elapsed time = %lfs, "
-            "buffer delay = %lfs\n",
-            recv_info.size(), seq, cur, D);
+            "buffer delay = %lfs, congestion window size = %d, threshold = %d, "
+            "rtt = %lfs\n",
+            recv_info.size(), seq, cur, D, cwnd, ssthresh, (double)rtt / 1000);
         break;
       } else {
         recv_info.pop();
@@ -81,6 +85,7 @@ void* tracker(void* arg) {
   struct tcp_info info;
   uint64_t bytes_recv, prev_bytes_recv = 0;
   socklen_t len = sizeof(info);
+  chrono::duration<double> t;
   while (1) {
     // get socket data
     if (getsockopt(conn_sock, IPPROTO_TCP, TCP_INFO, &info, &len)) {
@@ -92,16 +97,18 @@ void* tracker(void* arg) {
       prev_bytes_recv = bytes_recv;
       // add entry
       m.lock();
-      struct recvInfo entry(bytes_recv, clock());
+      struct recvInfo entry(bytes_recv, chrono::system_clock::now());
       recv_info.push(entry);
-
+      t = recv_info.back().recv_time - start;
       fprintf(fp,
               "[ TRACKER ] elapsed time = %lf, total bytes = %llu, "
               "congestion "
               "window size = %d, threshold = %d, rtt = %lfs\n",
-              (double)(recv_info.back().send_time - start) / CLOCKS_PER_SEC,
-              recv_info.back().total_bytes, info.tcpi_snd_cwnd,
+              t.count(), recv_info.back().total_bytes, info.tcpi_snd_cwnd,
               info.tcpi_snd_ssthresh, (double)info.tcpi_rtt / 1000);
+      ssthresh = info.tcpi_snd_ssthresh;
+      cwnd = info.tcpi_snd_cwnd;
+      rtt = info.tcpi_rtt;
       m.unlock();
     }
     // sleep for 10msec
@@ -144,7 +151,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   printf("Server connected.\n");
-  start = clock();
+  start = chrono::system_clock::now();
   pthread_create(&tid[0], NULL, receiver, NULL);
   pthread_create(&tid[1], NULL, tracker, NULL);
   pthread_join(tid[0], (void**)&result);
