@@ -55,7 +55,7 @@ void* sender(void* arg) {
     struct sendInfo entry(seq, chrono::system_clock::now());
     send_info.push(entry);
     m.unlock();
-    t = (send_info.back().send_time - chrono::system_clock::now());
+    t = (send_info.back().send_time - start);
     fprintf(fp, "[ SENDER ] elapsed time = %lf, total bytes sent = %llu\n",
             t.count(), send_info.back().total_bytes);
   }
