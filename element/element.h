@@ -9,11 +9,11 @@ class RetInfo {
         throughput_(throughput),
         rtt_(rtt),
         cwnd_(cwnd){};
-  void print(FILE* fp) {
-    fprintf(fp,
-            "size = %ld, buffer delay = %f, throughput = %f, rtt = %lf, "
-            "congestion window = %d\n",
-            size_, buf_delay_, throughput_, rtt_, cwnd_);
+  void print() {
+    printf(
+        "size = %ld, buffer delay = %f, throughput = %f, rtt = %lf, "
+        "congestion window = %d\n",
+        size_, buf_delay_, throughput_, rtt_, cwnd_);
   }
 
   ssize_t get_size() { return size_; }
