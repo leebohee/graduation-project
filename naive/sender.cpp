@@ -11,6 +11,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <chrono>
+#include <fstream>
+#include <iostream>
 #include <mutex>
 #include <queue>
 
@@ -30,14 +32,14 @@ int sock;  // socket
 chrono::system_clock::time_point start;
 mutex m;
 pthread_t tid[2];
-FILE* fp = NULL;  // output file
+ofstream fout("output_sender.txt");  // output file
 
 void sig_handler(int sig) {
   printf("Received SIGINT\n");
   pthread_cancel(tid[0]);
   pthread_cancel(tid[1]);
   close(sock);
-  fclose(fp);
+  fout.close();
   exit(0);
 }
 
@@ -51,13 +53,14 @@ void* sender(void* arg) {
   while (1) {
     m.lock();
     n = write(sock, buf, strlen(buf));
+    if (n <= 0) return NULL;
     seq += n;
     struct sendInfo entry(seq, chrono::system_clock::now());
     send_info.push(entry);
-    m.unlock();
     t = (send_info.back().send_time - start);
-    fprintf(fp, "[ SENDER ] elapsed time = %lf, total bytes sent = %llu\n",
-            t.count(), send_info.back().total_bytes);
+    fout << "[ SENDER ] elapsed time = " << t.count()
+         << " total_bytes = " << send_info.back().total_bytes << '\n';
+    m.unlock();
   }
   return NULL;
 }
@@ -90,36 +93,30 @@ void* tracker(void* arg) {
     // print information
     if (!send_info.empty()) {
       cur = chrono::system_clock::now() - start;
-      fprintf(
-          fp,
-          "[ TRACKER ] qsize = %d, total bytes = %llu, elapsed time = %lfs, "
-          "buffer delay = %lfs, "
-          "congestion "
-          "window size = %d, threshold = %d, rtt = %lfs\n",
-          send_info.size(), bytes_sent, cur, D, info.tcpi_snd_cwnd,
-          info.tcpi_snd_ssthresh, (double)info.tcpi_rtt / 1000);
+      fout << "[ TRACKER  ] elapsed time = " << cur.count()
+           << " total_bytes = " << bytes_sent << " buffer delay = " << D.count()
+           << " congestion window size = " << info.tcpi_snd_cwnd
+           << " threshold = " << info.tcpi_snd_ssthresh
+           << " rtt = " << (double)info.tcpi_rtt / 1000 << '\n';
     }
     m.unlock();
 
     // sleep for 10msec
-    int ret = usleep(10000);
+    usleep(10000);
   }
   return NULL;
 }
 
 int main(int argc, char* argv[]) {
-  int n, result;
-  char* haddr;
+  int result;
   struct sockaddr_in server_addr;
 
-  fp = fopen("output_sender.txt", "w");
   signal(SIGINT, sig_handler);  // Ctrl+c
 
   if (argc != 2) {
     printf("usage : Need destination address as an argument\n");
     return -1;
   }
-  haddr = argv[1];
 
   if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
     printf("socket() failed: Can't create socket\n");

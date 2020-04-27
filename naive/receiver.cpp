@@ -12,6 +12,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <chrono>
+#include <fstream>
+#include <iostream>
 #include <mutex>
 #include <queue>
 
@@ -31,7 +33,7 @@ int conn_sock;  // socket
 chrono::system_clock::time_point start;
 mutex m;
 pthread_t tid[2];
-FILE* fp = NULL;  // output file
+ofstream fout("output_receiver.txt");  // output file
 uint32_t ssthresh = 0;
 uint32_t cwnd = 0;
 uint32_t rtt = 0;
@@ -41,7 +43,7 @@ void sig_handler(int sig) {
   pthread_cancel(tid[0]);
   pthread_cancel(tid[1]);
   close(conn_sock);
-  fclose(fp);
+  fout.close();
   exit(0);
 }
 
@@ -53,6 +55,7 @@ void* receiver(void* arg) {
 
   while (1) {
     n = read(conn_sock, buf, BUF_LEN);
+    if (n <= 0) return NULL;
     seq += n;
     m.lock();
     // find matching recvInfo
@@ -65,12 +68,11 @@ void* receiver(void* arg) {
         cur = chrono::system_clock::now() - start;
 
         // print information
-        fprintf(
-            fp,
-            "[ RECEIVER ] qsize = %d, total bytes = %llu, elapsed time = %lfs, "
-            "buffer delay = %lfs, congestion window size = %d, threshold = %d, "
-            "rtt = %lfs\n",
-            recv_info.size(), seq, cur, D, cwnd, ssthresh, (double)rtt / 1000);
+        fout << "[ RECEIVER ] elapsed time = " << cur.count()
+             << " total_bytes = " << seq << " buffer delay = " << D.count()
+             << " congestion window size = " << cwnd
+             << " threshold = " << ssthresh << " rtt = " << (double)rtt / 1000
+             << '\n';
         break;
       } else {
         recv_info.pop();
@@ -100,15 +102,14 @@ void* tracker(void* arg) {
       struct recvInfo entry(bytes_recv, chrono::system_clock::now());
       recv_info.push(entry);
       t = recv_info.back().recv_time - start;
-      fprintf(fp,
-              "[ TRACKER ] elapsed time = %lf, total bytes = %llu, "
-              "congestion "
-              "window size = %d, threshold = %d, rtt = %lfs\n",
-              t.count(), recv_info.back().total_bytes, info.tcpi_snd_cwnd,
-              info.tcpi_snd_ssthresh, (double)info.tcpi_rtt / 1000);
       ssthresh = info.tcpi_snd_ssthresh;
       cwnd = info.tcpi_snd_cwnd;
       rtt = info.tcpi_rtt;
+      fout << "[ TRACKER  ] elapsed time = " << t.count()
+           << " total_bytes = " << bytes_recv
+           << " congestion window size = " << cwnd
+           << " threshold = " << ssthresh << " rtt = " << (double)rtt / 1000
+           << '\n';
       m.unlock();
     }
     // sleep for 10msec
@@ -118,11 +119,9 @@ void* tracker(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
-  int n, result, caddr_len, sock;
-  char* haddr;
+  int result, caddr_len, sock;
   struct sockaddr_in server_addr, client_addr;
 
-  fp = fopen("output_receiver.txt", "w");
   signal(SIGINT, sig_handler);  // Ctrl+c
 
   if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
