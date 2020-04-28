@@ -4,6 +4,7 @@
 1. [Project Title](#project-title)
 2. [Background Knowledge](#background)
 3. [Naive ELEMENT](#naive-element)
+4. [ELEMENT](#element)
 
 <a name="project-title"/>
 
@@ -107,3 +108,8 @@ I implement a sender/receiver with naive ELEMENT in [naive/](https://github.com/
 It connects to the host with the given IP address and runs two threads, sender and tracker. These two threads share a **queue** which stores information used for calculating a buffer delay. The sender thread sends data to the host and store an entry with total bytes sent and timestamp in the queue. The tracker thread periodically gets TCP information and estimates bytes sent at TCP layer using this information. Then it calculates the buffer delay by matching estimated bytes with total bytes of an entry in the queue. The calculated delay is recorded in output file. This program terminates when receiving ```Ctrl+C```. 
 #### Receiver
 It creates connection with any client and run two threads, receiver and tracker. Like the sender program, they have a shared **queue** and work similarly. What is different is, the tracker stores entry in the queue and the receiver calculates a buffer delay. The tracker thread periodically gets TCP information and estimates total received bytes. It stores estimated bytes and timestamp in the queue only when the process receives more data than the previous. After the receiver thread receives data, it matches total bytes received at the application layer with total bytes of an entry in the queue. If it finds the proper entry, it calculates the buffer delay and records it in the output file. This program also terminates with ```Ctrl+C``` signal.
+
+<a name="element"/>
+
+## ELEMENT
+I implement some APIs to utilize ELEMENT in [element/](https://github.com/leebohee/graduation-project/tree/master/element) directory. There are wrapper functions for ```write()``` and ```read()```. They return an instance of ```RetInfo```, which has size of written/read data, buffer delay, RTT, throughput and congestion window size measured by ELEMENT. You can use these APIs by including the [header file](https://github.com/leebohee/graduation-project/tree/master/element/element.h).
