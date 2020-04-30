@@ -17,7 +17,8 @@
 #include <mutex>
 #include <queue>
 
-#define BUF_LEN 60000
+#define BUF_LEN 4096
+#define MICRO 1000000
 
 using namespace std;
 
@@ -34,9 +35,7 @@ chrono::system_clock::time_point start;
 mutex m;
 pthread_t tid[2];
 ofstream fout("output_receiver.txt");  // output file
-uint32_t ssthresh = 0;
-uint32_t cwnd = 0;
-uint32_t rtt = 0;
+chrono::duration<double> buf_delay;
 
 void sig_handler(int sig) {
   printf("Received SIGINT\n");
@@ -59,20 +58,9 @@ void* receiver(void* arg) {
     seq += n;
     m.lock();
     // find matching recvInfo
-    if (!recv_info.empty()) {
-      printf("empty...\n");
-    }
     while (!recv_info.empty()) {
       if (recv_info.front().total_bytes > seq) {
-        D = chrono::system_clock::now() - recv_info.front().recv_time;
-        cur = chrono::system_clock::now() - start;
-
-        // print information
-        fout << "[ RECEIVER ] elapsed time = " << cur.count()
-             << " total_bytes = " << seq << " buffer delay = " << D.count()
-             << " congestion window size = " << cwnd
-             << " threshold = " << ssthresh << " rtt = " << (double)rtt / 1000
-             << '\n';
+        buf_delay = chrono::system_clock::now() - recv_info.front().recv_time;
         break;
       } else {
         recv_info.pop();
@@ -87,8 +75,9 @@ void* tracker(void* arg) {
   struct tcp_info info;
   uint64_t bytes_recv, prev_bytes_recv = 0;
   socklen_t len = sizeof(info);
-  chrono::duration<double> t;
+  chrono::duration<double> cur;
   while (1) {
+    m.lock();
     // get socket data
     if (getsockopt(conn_sock, IPPROTO_TCP, TCP_INFO, &info, &len)) {
       printf("getsockopt() failed: Can't get TCP information\n");
@@ -98,20 +87,14 @@ void* tracker(void* arg) {
     if (bytes_recv > prev_bytes_recv) {
       prev_bytes_recv = bytes_recv;
       // add entry
-      m.lock();
       struct recvInfo entry(bytes_recv, chrono::system_clock::now());
       recv_info.push(entry);
-      t = recv_info.back().recv_time - start;
-      ssthresh = info.tcpi_snd_ssthresh;
-      cwnd = info.tcpi_snd_cwnd;
-      rtt = info.tcpi_rtt;
-      fout << "[ TRACKER  ] elapsed time = " << t.count()
-           << " total_bytes = " << bytes_recv
-           << " congestion window size = " << cwnd
-           << " threshold = " << ssthresh << " rtt = " << (double)rtt / 1000
-           << '\n';
-      m.unlock();
+      cur = chrono::system_clock::now() - start;
+      fout << "[ ELEMENT ] " << cur.count()
+           << " : buffer delay = " << buf_delay.count() << " sec"
+           << " rtt = " << (float)info.tcpi_rtt / MICRO << " sec\n";
     }
+    m.unlock();
     // sleep for 10msec
     usleep(10000);
   }

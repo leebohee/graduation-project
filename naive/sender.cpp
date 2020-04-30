@@ -16,7 +16,8 @@
 #include <mutex>
 #include <queue>
 
-#define BUF_LEN 60000
+#define BUF_LEN 4096
+#define MICRO 1000000
 
 using namespace std;
 
@@ -58,8 +59,6 @@ void* sender(void* arg) {
     struct sendInfo entry(seq, chrono::system_clock::now());
     send_info.push(entry);
     t = (send_info.back().send_time - start);
-    fout << "[ SENDER ] elapsed time = " << t.count()
-         << " total_bytes = " << send_info.back().total_bytes << '\n';
     m.unlock();
   }
   return NULL;
@@ -69,9 +68,10 @@ void* tracker(void* arg) {
   struct tcp_info info;
   uint64_t bytes_sent;
   socklen_t len = sizeof(info);
-  chrono::duration<double> cur, D;
+  chrono::duration<double> cur, buf_delay;
 
   while (1) {
+    m.lock();
     // get socket data
     if (getsockopt(sock, IPPROTO_TCP, TCP_INFO, &info, &len)) {
       printf("getsockopt() failed: Can't get TCP information\n");
@@ -80,24 +80,23 @@ void* tracker(void* arg) {
 
     bytes_sent =
         info.tcpi_bytes_acked + (info.tcpi_unacked * info.tcpi_snd_mss);
-    m.lock();
     // find matching sendInfo
     while (!send_info.empty()) {
       if (send_info.front().total_bytes > bytes_sent) {
         break;
       } else {
-        D = chrono::system_clock::now() - send_info.front().send_time;
+        buf_delay = chrono::system_clock::now() - send_info.front().send_time;
         send_info.pop();
       }
     }
     // print information
     if (!send_info.empty()) {
       cur = chrono::system_clock::now() - start;
-      fout << "[ TRACKER  ] elapsed time = " << cur.count()
-           << " total_bytes = " << bytes_sent << " buffer delay = " << D.count()
-           << " congestion window size = " << info.tcpi_snd_cwnd
+      fout << "[ ELEMENT ] " << cur.count()
+           << " buffer delay = " << buf_delay.count() << " sec"
+           << " cwnd = " << info.tcpi_snd_cwnd
            << " threshold = " << info.tcpi_snd_ssthresh
-           << " rtt = " << (double)info.tcpi_rtt / 1000 << '\n';
+           << " rtt = " << (float)info.tcpi_rtt / MICRO << " sec\n";
     }
     m.unlock();
 
